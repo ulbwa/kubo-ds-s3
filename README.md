@@ -50,7 +50,7 @@ services:
   ipfs:
     image: ghcr.io/<owner>/kubo-ds-s3:v0.42.0
     environment:
-      S3_BUCKET: ipfs-blocks
+      S3_BUCKET: ipfs-data
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
@@ -61,10 +61,10 @@ services:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `S3_BUCKET` | _(unset)_ | S3 bucket for blocks. If unset, the repo is left with the default local datastore (no S3). |
+| `S3_BUCKET` | _(unset)_ | S3 bucket for the **entire** datastore (blocks **and** pins). If unset, the repo keeps the default local datastore (no S3). |
 | `S3_REGION` | `us-east-1` | AWS region. |
 | `S3_ENDPOINT` | _(empty)_ | Custom endpoint for S3-compatible stores (MinIO, etc.). Empty = real AWS S3. |
-| `S3_ROOT_DIRECTORY` | `blocks` | Key prefix inside the bucket. |
+| `S3_ROOT_DIRECTORY` | `ipfs` | Key prefix inside the bucket (blocks under `<prefix>/blocks/`, pins under `<prefix>/pins/`). |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | _(empty)_ | Credentials. If empty, the standard AWS credential chain is used (env / `~/.aws`). |
 | `IPFS_PROFILE` | _(unset)_ | Optional Kubo init profile (e.g. `server`). |
 
@@ -80,41 +80,27 @@ install -m755 kubo-ds-s3_kubo-v0.42.0_linux-amd64 /usr/local/bin/ipfs
 ipfs --version
 ```
 
-Then configure the `s3ds` datastore. After `ipfs init`, set `Datastore.Spec` so the `/blocks` mount uses `s3ds`:
+Then configure the datastore. After `ipfs init`, set `Datastore.Spec` to a single `s3ds` so the **entire** datastore (blocks, pins, MFS, IPNS) lives in S3:
 
 ```json
 {
-  "type": "mount",
-  "mounts": [
-    {
-      "mountpoint": "/blocks",
-      "type": "measure",
-      "prefix": "s3.datastore",
-      "child": {
-        "type": "s3ds",
-        "region": "us-east-1",
-        "bucket": "my-ipfs-bucket",
-        "rootDirectory": "blocks",
-        "regionEndpoint": "",
-        "accessKey": "",
-        "secretKey": ""
-      }
-    },
-    {
-      "mountpoint": "/",
-      "type": "measure",
-      "prefix": "leveldb.datastore",
-      "child": { "type": "levelds", "path": "datastore", "compression": "none" }
-    }
-  ]
+  "type": "s3ds",
+  "region": "us-east-1",
+  "bucket": "my-ipfs-bucket",
+  "rootDirectory": "ipfs",
+  "regionEndpoint": "",
+  "accessKey": "",
+  "secretKey": ""
 }
 ```
 
-`rootDirectory` for the `s3ds` child must also be reflected in the repo's `datastore_spec` file. The Docker image handles all of this automatically; for the raw binary, mirroring the image's [`docker-entrypoint.sh`](docker-entrypoint.sh) is the simplest path. Blank `accessKey`/`secretKey` fall back to the AWS credential chain. See the [go-ds-s3 README](https://github.com/ipfs/go-ds-s3#readme) for the full config reference.
+Kubo also keeps a `datastore_spec` file that must match this spec's DiskSpec — for `s3ds` that is `{"bucket":"…","region":"…","rootDirectory":"…"}` (sorted keys, no trailing newline), otherwise the daemon refuses to start. The Docker image writes it (and removes the unused local `blocks/`/`datastore/` dirs that `ipfs init` created) automatically; for the raw binary, mirroring the image's [`docker-entrypoint.sh`](docker-entrypoint.sh) is the simplest path. Blank `accessKey`/`secretKey` fall back to the AWS credential chain. See the [go-ds-s3 README](https://github.com/ipfs/go-ds-s3#readme) for the full config reference.
 
 ## Distributed architecture (one S3, many nodes)
 
-Blocks live in the `/blocks` mount (`s3ds` → S3); only node-local metadata (pins, keys, MFS) stays in the local `levelds`. Because the heavy block data is in shared S3, **several independent Kubo nodes can point at the same bucket and all serve the same content** — including a node that never added it and has no peers. This was verified end-to-end: a second, offline node with an empty local store retrieved and served 4&nbsp;MB of content (CLI and HTTP gateway) purely from the shared bucket. That makes the bucket a single source of truth you can place behind a CDN, with stateless Kubo gateway nodes in front.
+The **entire** datastore — blocks, pins, MFS and IPNS records — lives in S3; only the node identity (`config` + `keystore`) stays local, so each node keeps its own PeerID. Several independent Kubo nodes pointed at the same bucket therefore share not just the content but the **pinset**: pin something on one node and every other node sees and serves it. Verified end-to-end — a second, offline node with an empty local store (~36&nbsp;KB, no `blocks/`/`datastore/` dirs) listed the first node's pins and served its content (CLI + HTTP gateway) purely from the shared bucket. The bucket is the single source of truth you can put behind a CDN, with stateless Kubo nodes in front.
+
+**Caveats of sharing the whole datastore.** Mutable state (the pinset, the MFS root) is plain object storage with no locking, so concurrent writes from multiple nodes can race. Designate one "writer" node for pinning/MFS and treat the rest as read replicas; don't run `ipfs repo gc` on more than one node at a time. Metadata operations are S3 round-trips, so they are slower than a local datastore — fine for a serve-heavy fleet, less so for write-heavy workloads.
 
 ## Artifacts and tags
 
