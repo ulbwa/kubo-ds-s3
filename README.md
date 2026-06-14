@@ -6,7 +6,7 @@ Automated builds of [Kubo](https://github.com/ipfs/kubo) with the [go-ds-s3](htt
 
 This repository contains GitHub Actions that watch stable Kubo releases. For each new stable release it builds a custom `ipfs` binary that has the `s3ds` datastore (block storage backed by S3 / S3-compatible object storage) **bundled directly into Kubo**, and publishes it two ways:
 
-- a Docker image on GHCR: `ghcr.io/<owner>/kubo-ds-s3` (`<owner>` is this repo's GitHub owner),
+- a Docker image on GHCR: `ghcr.io/ulbwa/kubo-ds-s3`,
 - a static `linux/amd64` binary attached to a GitHub Release.
 
 There is nothing to install into a stock Kubo — the artifact **is** Kubo, with S3 support already inside it.
@@ -39,7 +39,7 @@ docker run -d --name ipfs \
   -e S3_SECRET_KEY=... \
   -p 8080:8080 -p 5001:5001 \
   -v ipfs-data:/data/ipfs \
-  ghcr.io/<owner>/kubo-ds-s3:v0.42.0
+  ghcr.io/ulbwa/kubo-ds-s3:v0.42.0
 ```
 
 For an S3-compatible backend (e.g. MinIO), point `S3_ENDPOINT` at it:
@@ -48,7 +48,7 @@ For an S3-compatible backend (e.g. MinIO), point `S3_ENDPOINT` at it:
 # docker-compose excerpt
 services:
   ipfs:
-    image: ghcr.io/<owner>/kubo-ds-s3:v0.42.0
+    image: ghcr.io/ulbwa/kubo-ds-s3:v0.42.0
     environment:
       S3_BUCKET: ipfs-data
       S3_ENDPOINT: http://minio:9000
@@ -105,7 +105,7 @@ docker run -d --name ipfs \
   -e S3_BUCKET=my-bucket -e S3_ENDPOINT=… -e S3_ACCESS_KEY=… -e S3_SECRET_KEY=… \
   -v /srv/ipfs:/data/ipfs \
   -p 8080:8080 -p 5001:5001 \
-  ghcr.io/<owner>/kubo-ds-s3:v0.42.0
+  ghcr.io/ulbwa/kubo-ds-s3:v0.42.0
 ```
 
 On first start the entrypoint runs `ipfs init` (and, if `S3_BUCKET` is set, writes the s3ds config) into `/srv/ipfs/config`. After that, tweak it however you like — edit the file directly, or use the CLI and restart:
