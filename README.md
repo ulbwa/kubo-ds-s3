@@ -126,6 +126,8 @@ docker restart ipfs
 
 The **entire** datastore — blocks, pins, MFS and IPNS records — lives in S3; only the node identity (`config` + `keystore`) stays local, so each node keeps its own PeerID. Several independent Kubo nodes pointed at the same bucket therefore share not just the content but the **pinset**: pin something on one node and every other node sees and serves it. Verified end-to-end — a second, offline node with an empty local store (~36&nbsp;KB, no `blocks/`/`datastore/` dirs) listed the first node's pins and served its content (CLI + HTTP gateway) purely from the shared bucket. The bucket is the single source of truth you can put behind a CDN, with stateless Kubo nodes in front.
 
+This whole-datastore-in-S3 layout is simply how the **image's entrypoint** configures Kubo by default — it is not a limitation of Kubo or of the binary. Using the binary (or by giving the image your own `config`, see [Configuring Kubo](#configuring-kubo)) you can set any `Datastore.Spec` you need: keep pins and metadata in a local `levelds` and put only `/blocks` in S3, split blocks across several backends, and so on. The shared-pinset behaviour and the caveats below apply specifically to the choice of routing the entire datastore to one bucket.
+
 **Caveats of sharing the whole datastore.** Mutable state (the pinset, the MFS root) is plain object storage with no locking, so concurrent writes from multiple nodes can race. Designate one "writer" node for pinning/MFS and treat the rest as read replicas; don't run `ipfs repo gc` on more than one node at a time. Metadata operations are S3 round-trips, so they are slower than a local datastore — fine for a serve-heavy fleet, less so for write-heavy workloads.
 
 ## Artifacts and tags
