@@ -142,7 +142,7 @@ Docker tags: `:<KUBO>`, `:<KUBO>-build.<REV>`, `:latest`.
 
 ## How it works
 
-A daily scheduled workflow ([`.github/workflows/watch-and-build.yml`](.github/workflows/watch-and-build.yml), also runnable via `workflow_dispatch`):
+A weekly scheduled workflow ([`.github/workflows/watch-and-build.yml`](.github/workflows/watch-and-build.yml), also runnable via `workflow_dispatch`):
 
 1. Finds the latest stable Kubo release (stable = tag matching `^v\d+\.\d+\.\d+$`; release candidates excluded).
 2. Resolves the Go toolchain from that Kubo tag's `go.mod`.
