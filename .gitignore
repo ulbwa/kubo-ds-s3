@@ -30,3 +30,11 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Brainstorm/plan working artifacts
+docs/superpowers/
+
+# Local build/verify scratch
+/tmp-build/
+*.so
+*.so.sha256
