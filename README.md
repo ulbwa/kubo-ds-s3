@@ -28,47 +28,18 @@ This is the approach go-ds-s3's own README recommends for reliability.
 
 ## Use the Docker image
 
-The image initializes the repo on first start and configures `s3ds` from environment variables, then runs the daemon.
+The image is plain Kubo with `s3ds` compiled in. It does **not** configure the datastore for you — you bring the configuration. The Kubo repo lives at `/data/ipfs`, so mount a volume there:
 
 ```bash
 docker run -d --name ipfs \
-  -e S3_BUCKET=my-ipfs-bucket \
-  -e S3_REGION=us-east-1 \
-  -e S3_ENDPOINT=https://s3.us-east-1.amazonaws.com \
-  -e S3_ACCESS_KEY=... \
-  -e S3_SECRET_KEY=... \
   -p 8080:8080 -p 5001:5001 \
-  -v ipfs-data:/data/ipfs \
+  -v /srv/ipfs:/data/ipfs \
   ghcr.io/ulbwa/kubo-ds-s3:v0.42.0
 ```
 
-For an S3-compatible backend (e.g. MinIO), point `S3_ENDPOINT` at it:
+If the mounted volume already holds a configured repo, Kubo uses it as-is. If it's empty, the entrypoint runs `ipfs init` once (a default local datastore) so the daemon can start — then you set up `s3ds` yourself. See [Configuring Kubo](#configuring-kubo) for both paths and [Use the binary](#use-the-binary) for the `Datastore.Spec` to apply.
 
-```yaml
-# docker-compose excerpt
-services:
-  ipfs:
-    image: ghcr.io/ulbwa/kubo-ds-s3:v0.42.0
-    environment:
-      S3_BUCKET: ipfs-data
-      S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
-    ports: ["8080:8080", "5001:5001"]
-```
-
-### Environment variables
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `S3_BUCKET` | _(unset)_ | S3 bucket for the **entire** datastore (blocks **and** pins). If unset, the repo keeps the default local datastore (no S3). |
-| `S3_REGION` | `us-east-1` | AWS region. |
-| `S3_ENDPOINT` | _(empty)_ | Custom endpoint for S3-compatible stores (MinIO, etc.). Empty = real AWS S3. |
-| `S3_ROOT_DIRECTORY` | `ipfs` | Key prefix inside the bucket (blocks under `<prefix>/blocks/`, pins under `<prefix>/pins/`). |
-| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | _(empty)_ | Credentials. If empty, the standard AWS credential chain is used (env / `~/.aws`). |
-| `IPFS_PROFILE` | _(unset)_ | Optional Kubo init profile (e.g. `server`). |
-
-Configuration only happens on first start (when `$IPFS_PATH/config` does not exist).
+(Optional: `-e IPFS_PROFILE=server` applies a Kubo init profile, but only when the repo is first created.)
 
 ## Use the binary
 
@@ -102,13 +73,12 @@ The image is plain Kubo, configured the normal Kubo way — via the JSON `config
 
 ```bash
 docker run -d --name ipfs \
-  -e S3_BUCKET=my-bucket -e S3_ENDPOINT=… -e S3_ACCESS_KEY=… -e S3_SECRET_KEY=… \
   -v /srv/ipfs:/data/ipfs \
   -p 8080:8080 -p 5001:5001 \
   ghcr.io/ulbwa/kubo-ds-s3:v0.42.0
 ```
 
-On first start the entrypoint runs `ipfs init` (and, if `S3_BUCKET` is set, writes the s3ds config) into `/srv/ipfs/config`. After that, tweak it however you like — edit the file directly, or use the CLI and restart:
+On first start (empty volume) the entrypoint runs `ipfs init` into `/srv/ipfs/config`. From there you configure it yourself — to use `s3ds`, set `Datastore.Spec` (see [Use the binary](#use-the-binary)) and keep `datastore_spec` in sync; tweak anything else by editing the file or via the CLI, then restart:
 
 ```bash
 docker exec ipfs ipfs config Routing.Type autoclient
@@ -116,7 +86,7 @@ docker exec ipfs ipfs config --json Swarm.ConnMgr.HighWater 200
 docker restart ipfs
 ```
 
-**Bring your own config.** The entrypoint only initializes when `/data/ipfs/config` is absent. If the mounted volume already holds an initialized repo (`config`, `datastore_spec`, `keystore`, …), the image skips both `ipfs init` and the s3ds env shortcut and runs Kubo against your config verbatim — full control, no env vars. The simplest way to get there: start the container once to let it init, stop it, edit `/srv/ipfs/config`, and start it again.
+**Bring your own config.** The entrypoint only initializes when `/data/ipfs/config` is absent. If the mounted volume already holds an initialized repo (`config`, `datastore_spec`, `keystore`, …), the image skips `ipfs init` and runs Kubo against your config verbatim — full control. The simplest way to get there: start the container once to let it init, stop it, edit `/srv/ipfs/config`, and start it again.
 
 > If you change `Datastore.Spec` by hand, keep the `datastore_spec` file in sync (see [Use the binary](#use-the-binary)) or the daemon won't start.
 
@@ -124,9 +94,9 @@ docker restart ipfs
 
 ## Distributed architecture (one S3, many nodes)
 
-The **entire** datastore — blocks, pins, MFS and IPNS records — lives in S3; only the node identity (`config` + `keystore`) stays local, so each node keeps its own PeerID. Several independent Kubo nodes pointed at the same bucket therefore share not just the content but the **pinset**: pin something on one node and every other node sees and serves it. Verified end-to-end — a second, offline node with an empty local store (~36&nbsp;KB, no `blocks/`/`datastore/` dirs) listed the first node's pins and served its content (CLI + HTTP gateway) purely from the shared bucket. The bucket is the single source of truth you can put behind a CDN, with stateless Kubo nodes in front.
+Point the whole datastore at a single `s3ds` (see [Configuring Kubo](#configuring-kubo)) and **everything** — blocks, pins, MFS and IPNS records — lives in S3; only the node identity (`config` + `keystore`) stays local, so each node keeps its own PeerID. Several independent Kubo nodes sharing one bucket then share not just the content but the **pinset**: pin something on one node and every other node sees and serves it. Verified end-to-end — a second, offline node with an empty local store (~36&nbsp;KB, no `blocks/`/`datastore/` dirs) listed the first node's pins and served its content (CLI + HTTP gateway) purely from the shared bucket. The bucket is the single source of truth you can put behind a CDN, with stateless Kubo nodes in front.
 
-This whole-datastore-in-S3 layout is simply how the **image's entrypoint** configures Kubo by default — it is not a limitation of Kubo or of the binary. Using the binary (or by giving the image your own `config`, see [Configuring Kubo](#configuring-kubo)) you can set any `Datastore.Spec` you need: keep pins and metadata in a local `levelds` and put only `/blocks` in S3, split blocks across several backends, and so on. The shared-pinset behaviour and the caveats below apply specifically to the choice of routing the entire datastore to one bucket.
+This is just one datastore layout — it's entirely your `Datastore.Spec`. You could instead keep pins and metadata in a local `levelds` and put only `/blocks` in S3, split blocks across several backends, and so on. The shared-pinset behaviour and the caveats below apply specifically to routing the entire datastore to one bucket.
 
 **Caveats of sharing the whole datastore.** Mutable state (the pinset, the MFS root) is plain object storage with no locking, so concurrent writes from multiple nodes can race. Designate one "writer" node for pinning/MFS and treat the rest as read replicas; don't run `ipfs repo gc` on more than one node at a time. Metadata operations are S3 round-trips, so they are slower than a local datastore — fine for a serve-heavy fleet, less so for write-heavy workloads.
 
